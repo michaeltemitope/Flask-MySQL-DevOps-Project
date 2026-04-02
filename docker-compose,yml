@@ -49,29 +49,15 @@ services:
     networks:
       - app_network
 
-    # UPDATED — Improved healthcheck for CI reliability
+    # UPDATED — relaxed healthcheck timing for CI debugging
     # CMD-SHELL runs the command through the container shell
-    # which correctly expands environment variables at runtime
-    #
-    # Previously used CMD form which does not invoke a shell
-    # meaning ${MYSQL_ROOT_PASSWORD} was not always expanded
-    # reliably in CI environments causing false unhealthy results
-    #
-    # $$ is used instead of $ to escape the variable correctly
-    # inside docker-compose YAML — a single $ would be treated
-    # as a docker-compose variable substitution and fail
-    # $$ tells docker-compose to pass a literal $ to the shell
-    # so the container shell expands it as $MYSQL_ROOT_PASSWORD
-    #
-    # || exit 1 makes the failure explicit — if mysqladmin ping
-    # fails for any reason the shell exits with code 1 which
-    # Docker recognises as an unhealthy result immediately
+    # and $$ ensures the variable is expanded inside the container
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p$$MYSQL_ROOT_PASSWORD --silent || exit 1"]
-      interval: 10s      # Check every 10 seconds
-      timeout: 5s        # Fail the check if no response within 5 seconds
-      retries: 5         # Mark as unhealthy after 5 consecutive failures
-      start_period: 30s  # Give MySQL 30 seconds to initialize before checking
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
 
   # -------------------------------------------------------------
   # Flask Application Service
@@ -118,10 +104,10 @@ services:
     # and is not available by default in python:3.9-slim
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
-      interval: 30s      # Check every 30 seconds
-      timeout: 10s       # Fail if no response within 10 seconds
-      retries: 3         # Mark unhealthy after 3 consecutive failures
-      start_period: 15s  # Give Flask 15 seconds to boot before first check
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
     restart: unless-stopped
 
