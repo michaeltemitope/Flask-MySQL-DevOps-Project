@@ -72,7 +72,7 @@ This project focuses on applying real-world **DevOps practices**, including cont
 ├── .env
 ├── .env.example
 ├── .dockerignore
-└── .github/workflows/ci-cd.yml
+└── .github/workflows/deploy.yml
 
 ```
 
@@ -100,6 +100,16 @@ docker compose up --build
 4. Access the app
 http://localhost:5000
 
+## 🔐 Environment Variables
+
+The `.env` file is **not committed** to the repository.
+
+- Managed locally for development
+- Managed directly on EC2 for production
+- Must exist before running Docker Compose
+
+A sample file is provided: `.env.example`
+
 ## 📸 Application Screenshots
 
 ### 🏠 Homepage
@@ -120,8 +130,6 @@ Shows data created from db-init/message.sql
 
 ### 📦 Docker Compose Logs (Startup Flow)
 ![Strat-up-Flow](screenshots/docker_compose-startup-flow.png)
-
-### 🧱 Project Structure
 
 ## 🔄 CI/CD Pipeline
 ![Pipeline](screenshots/pipeline.png)

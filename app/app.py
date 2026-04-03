@@ -80,5 +80,8 @@ def health():
         }), 500
 
 if __name__ == '__main__':
+    # NOTE:
+    # This block is only used for local development/testing.
+    # In production (Docker), the app is served via Gunicorn (see Dockerfile).
     init_db()
     app.run(host='0.0.0.0', port=5000, debug=True)
