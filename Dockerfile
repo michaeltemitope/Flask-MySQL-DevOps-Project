@@ -1,5 +1,5 @@
 # Use official lightweight Python image as base
-FROM python:3.9-slim
+FROM python:3.9.21-slim
 
 # Stop Python from writing .pyc files inside the container
 ENV PYTHONDONTWRITEBYTECODE=1
