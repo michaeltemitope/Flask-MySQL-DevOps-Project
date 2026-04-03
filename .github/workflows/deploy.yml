@@ -35,7 +35,6 @@ permissions:
   contents: read
 
 jobs:
-
   ci:
     name: CI — Validate
     runs-on: ubuntu-latest
@@ -76,15 +75,16 @@ jobs:
 
       - name: Run integration test
         id: integration_test
+        shell: bash
         run: |
-          set +e
-
           echo "Starting full stack for integration test..."
+
           docker compose up -d --build
           COMPOSE_EXIT_CODE=$?
 
           if [ "${COMPOSE_EXIT_CODE}" -ne 0 ]; then
             echo "compose_failed=true" >> "$GITHUB_OUTPUT"
+            echo "health_failed=false" >> "$GITHUB_OUTPUT"
             echo "compose_exit_code=${COMPOSE_EXIT_CODE}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -92,7 +92,8 @@ jobs:
           echo "Polling /health until Flask is ready..."
           TIMEOUT=120
           ELAPSED=0
-          until curl -sf http://localhost:5000/health; do
+
+          while ! curl -sf http://localhost:5000/health; do
             if [ "${ELAPSED}" -ge "${TIMEOUT}" ]; then
               echo "compose_failed=false" >> "$GITHUB_OUTPUT"
               echo "health_failed=true" >> "$GITHUB_OUTPUT"
@@ -109,6 +110,7 @@ jobs:
 
       - name: Show compose debug logs on failure
         if: steps.integration_test.outputs.compose_failed == 'true' || steps.integration_test.outputs.health_failed == 'true'
+        shell: bash
         run: |
           echo "--- docker compose ps ---"
           docker compose ps || true
@@ -124,6 +126,7 @@ jobs:
 
       - name: Tear down integration test stack
         if: always()
+        shell: bash
         run: |
           docker compose down -v || true
           echo "Integration test stack torn down"
