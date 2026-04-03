@@ -78,23 +78,11 @@ jobs:
           echo "wait-for-db.sh syntax is valid"
 
       - name: Run integration test
+        id: integration_test
+        continue-on-error: true
         run: |
           echo "Starting full stack for integration test..."
-
-          # UPDATED — print logs immediately if compose startup fails
-          if ! docker compose up -d --build; then
-            echo "ERROR: docker compose up failed"
-            echo ""
-            echo "--- docker compose ps ---"
-            docker compose ps || true
-            echo ""
-            echo "--- db logs ---"
-            docker compose logs db --tail=100 || true
-            echo ""
-            echo "--- all service logs ---"
-            docker compose logs --tail=100 || true
-            exit 1
-          fi
+          docker compose up -d --build
 
           echo "Polling /health until Flask is ready..."
           TIMEOUT=120
@@ -102,15 +90,6 @@ jobs:
           until curl -sf http://localhost:5000/health; do
             if [ "${ELAPSED}" -ge "${TIMEOUT}" ]; then
               echo "ERROR: Flask did not become healthy within ${TIMEOUT}s"
-              echo ""
-              echo "--- docker compose ps ---"
-              docker compose ps || true
-              echo ""
-              echo "--- db logs ---"
-              docker compose logs db --tail=100 || true
-              echo ""
-              echo "--- all service logs ---"
-              docker compose logs --tail=100 || true
               exit 1
             fi
             echo "Not ready yet — waiting 5s (${ELAPSED}s elapsed)"
@@ -120,10 +99,22 @@ jobs:
 
           echo "Integration test passed — /health responded successfully"
 
+      - name: Show compose debug logs on failure
+        if: steps.integration_test.outcome == 'failure'
+        run: |
+          echo "--- docker compose ps ---"
+          docker compose ps || true
+          echo ""
+          echo "--- db logs ---"
+          docker compose logs db --tail=200 || true
+          echo ""
+          echo "--- all service logs ---"
+          docker compose logs --tail=200 || true
+          exit 1
+
       - name: Tear down integration test stack
         if: always()
         run: |
-          # UPDATED — do not fail teardown if compose stack was never fully created
           docker compose down -v || true
           echo "Integration test stack torn down"
 
@@ -199,10 +190,6 @@ jobs:
             echo "[1/5] Navigating to application directory..."
             cd "${APP_DIR}"
 
-            # NOTE — .env must already exist at this location
-            # on EC2 before deployment. It is not managed by
-            # this pipeline. If it is missing docker compose
-            # will fail to start with missing variable errors.
             echo "[2/5] Syncing latest code from remote..."
             git fetch origin main
             git reset --hard origin/main
@@ -214,7 +201,6 @@ jobs:
             echo "[4/5] Rebuilding image and starting containers..."
             docker compose up -d --build
 
-            # Small buffer before health check begins
             sleep 5
 
             echo "[5/5] Cleaning up unused Docker images..."
