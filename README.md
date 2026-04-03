@@ -124,6 +124,7 @@ Shows data created from db-init/message.sql
 ### 🧱 Project Structure
 
 ## 🔄 CI/CD Pipeline
+![Pipeline](screenshots/pipeline.png)
 
 Workflow Overview
 - Developer pushes code to main
