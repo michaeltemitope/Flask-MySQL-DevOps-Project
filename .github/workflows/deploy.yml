@@ -1,52 +1,170 @@
-name: Deploy Flask MySQL App to EC2
+name: CI/CD Pipeline
 
 on:
   push:
     branches:
       - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
-  deploy:
+  ci:
+    name: CI — Validate
     runs-on: ubuntu-latest
 
     steps:
-      - name: Deploy to EC2 via SSH
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USERNAME }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          port: ${{ secrets.EC2_PORT }}
-          script: |
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate docker-compose configuration
+        run: |
+          cat <<EOF > .env
+          DB_HOST=db
+          DB_PORT=3306
+          DB_USER=dummy_user
+          DB_PASSWORD=dummy_password
+          DB_NAME=dummy_db
+          DB_MAX_RETRIES=30
+          DB_RETRY_INTERVAL=2
+          DB_MAX_SLEEP=30
+          MYSQL_ROOT_PASSWORD=dummy_root_password
+          MYSQL_USER=dummy_user
+          MYSQL_PASSWORD=dummy_password
+          MYSQL_DATABASE=dummy_db
+          EOF
+          docker compose config --quiet
+          echo "docker-compose.yml syntax is valid"
+
+      - name: Validate Dockerfile build
+        run: |
+          docker build -t flask-app-ci-check .
+          echo "Dockerfile build successful"
+
+      - name: Validate wait-for-db.sh syntax
+        run: |
+          bash -n wait-for-db.sh
+          echo "wait-for-db.sh syntax is valid"
+
+      - name: Run integration test
+        run: |
+          echo "Starting full stack for integration test..."
+          docker compose up -d --build
+
+          echo "Polling /health until Flask is ready..."
+          TIMEOUT=120
+          ELAPSED=0
+          until curl -sf http://localhost:5000/health; do
+            if [ "${ELAPSED}" -ge "${TIMEOUT}" ]; then
+              echo "ERROR: Flask did not become healthy within ${TIMEOUT}s"
+              docker compose logs
+              exit 1
+            fi
+            echo "Not ready yet — waiting 5s (${ELAPSED}s elapsed)"
+            sleep 5
+            ELAPSED=$(( ELAPSED + 5 ))
+          done
+          echo "Integration test passed — /health responded successfully"
+
+      - name: Tear down integration test stack
+        if: always()
+        run: |
+          docker compose down -v
+          echo "Integration test stack torn down"
+
+  cd:
+    name: CD — Deploy to EC2
+    runs-on: ubuntu-latest
+    needs: ci
+
+    env:
+      EC2_HOST: ${{ secrets.APP_EC2_HOST }}
+      EC2_PORT: ${{ secrets.APP_EC2_PORT }}
+      EC2_USER: ${{ secrets.APP_EC2_USER }}
+      DEPLOY_PATH: /home/deployer/Flask-MySQL-DevOps-Project
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate required GitHub secrets
+        env:
+          APP_EC2_HOST: ${{ secrets.APP_EC2_HOST }}
+          APP_EC2_PORT: ${{ secrets.APP_EC2_PORT }}
+          APP_EC2_USER: ${{ secrets.APP_EC2_USER }}
+          APP_EC2_PRIVATE_KEY: ${{ secrets.APP_EC2_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          [ -n "${APP_EC2_HOST}" ] || { echo "ERROR: GitHub secret APP_EC2_HOST is missing or empty."; exit 1; }
+          [ -n "${APP_EC2_PORT}" ] || { echo "ERROR: GitHub secret APP_EC2_PORT is missing or empty."; exit 1; }
+          [ -n "${APP_EC2_USER}" ] || { echo "ERROR: GitHub secret APP_EC2_USER is missing or empty."; exit 1; }
+          [ -n "${APP_EC2_PRIVATE_KEY}" ] || { echo "ERROR: GitHub secret APP_EC2_PRIVATE_KEY is missing or empty."; exit 1; }
+
+          echo "All required GitHub secrets are present."
+
+      - name: Configure SSH key and verify EC2 host fingerprint
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          printf '%s\n' "${{ secrets.APP_EC2_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          ssh-keyscan -p "${EC2_PORT}" -H "${EC2_HOST}" >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+          echo "SSH key and host verification configured"
+
+      - name: Test SSH connection to EC2
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+              -p "${EC2_PORT}" \
+              "${EC2_USER}@${EC2_HOST}" \
+              "echo 'SSH connection successful'"
+
+      - name: Deploy application on EC2
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+              -p "${EC2_PORT}" \
+              "${EC2_USER}@${EC2_HOST}" \
+              "APP_DIR='${DEPLOY_PATH}' bash -s" << 'ENDSSH'
             set -euxo pipefail
 
-            APP_DIR="$HOME/Flask-MySQL-DevOps-Project"
+            echo "============================================"
+            echo "Deployment started: $(date)"
+            echo "============================================"
 
-            echo "========== 1. Go to project directory =========="
-            cd "$APP_DIR"
+            echo "[1/9] Navigating to application directory..."
+            cd "${APP_DIR}"
 
-            echo "========== 2. Update project code =========="
-            git fetch origin
+            echo "[2/9] Syncing latest code from remote..."
+            git fetch origin main
             git reset --hard origin/main
 
-            echo "========== 3. Check required files =========="
+            echo "[3/9] Checking required files..."
             pwd
             ls -la
             test -f docker-compose.yml
             test -f .env
 
-            echo "========== 4. Show docker versions =========="
+            echo "[4/9] Docker versions..."
             docker --version
             docker compose version
 
-            echo "========== 5. Validate compose file =========="
+            echo "[5/9] Validating compose file..."
             docker compose config > /tmp/compose-rendered.yml
             echo "Compose file rendered successfully"
 
-            echo "========== 6. Stop old containers =========="
+            echo "[6/9] Stopping existing containers..."
             docker compose down || true
 
-            echo "========== 7. Start only database first =========="
+            echo "[7/9] Starting database only..."
             docker compose up -d db
 
             DB_CONTAINER_ID="$(docker compose ps -q db)"
@@ -59,7 +177,7 @@ jobs:
 
             echo "DB container ID: $DB_CONTAINER_ID"
 
-            echo "========== 8. Wait for DB health =========="
+            echo "[8/9] Waiting for DB health..."
             for i in $(seq 1 12); do
               STATUS="$(docker inspect --format='{{.State.Status}}' "$DB_CONTAINER_ID" 2>/dev/null || echo unknown)"
               HEALTH="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' "$DB_CONTAINER_ID" 2>/dev/null || echo unknown)"
@@ -79,7 +197,7 @@ jobs:
               sleep 10
             done
 
-            echo "========== 9. DB container inspection =========="
+            echo "========== DB container inspection =========="
             docker compose ps
             docker inspect "$DB_CONTAINER_ID" --format='
             Container Name: {{.Name}}
@@ -90,7 +208,7 @@ jobs:
             Health: {{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}
             '
 
-            echo "========== 10. DB healthcheck log =========="
+            echo "========== DB healthcheck log =========="
             docker inspect "$DB_CONTAINER_ID" --format='{{if .State.Health}}{{range .State.Health.Log}}
             ----
             Start: {{.Start}}
@@ -100,7 +218,7 @@ jobs:
             {{.Output}}
             {{end}}{{else}}No healthcheck log available{{end}}'
 
-            echo "========== 11. DB container logs =========="
+            echo "========== DB container logs =========="
             docker compose logs db --tail=200 || true
 
             DB_HEALTH="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' "$DB_CONTAINER_ID" 2>/dev/null || echo unknown)"
@@ -108,7 +226,6 @@ jobs:
             if [ "$DB_HEALTH" != "healthy" ]; then
               echo "ERROR: Database did not become healthy."
 
-              echo "========== Extra diagnostics =========="
               echo "--- docker compose ps ---"
               docker compose ps || true
 
@@ -121,11 +238,41 @@ jobs:
               exit 1
             fi
 
-            echo "========== 12. Start full application =========="
-            docker compose up -d
+            echo "[9/9] Starting full application..."
+            docker compose up -d --build
 
-            echo "========== 13. Final status =========="
+            echo "========== Final status =========="
             docker compose ps
 
-            echo "========== 14. Final logs =========="
+            echo "========== Final logs =========="
             docker compose logs --tail=100 || true
+
+            echo "Verifying deployment health via localhost..."
+            TIMEOUT=60
+            ELAPSED=0
+            until curl -sf http://localhost:5000/health; do
+              if [ "${ELAPSED}" -ge "${TIMEOUT}" ]; then
+                echo "============================================"
+                echo "ERROR: App did not become healthy after ${TIMEOUT}s"
+                echo "============================================"
+                echo "--- docker compose ps ---"
+                docker compose ps
+                echo "--- docker compose logs (last 100 lines) ---"
+                docker compose logs --tail=100
+                exit 1
+              fi
+              echo "Not ready yet — waiting 5s (${ELAPSED}s elapsed)"
+              sleep 5
+              ELAPSED=$(( ELAPSED + 5 ))
+            done
+
+            echo "============================================"
+            echo "Health check passed — app is live on EC2"
+            echo "============================================"
+          ENDSSH
+
+      - name: Clean up sensitive files from runner
+        if: always()
+        run: |
+          rm -f ~/.ssh/deploy_key
+          echo "Sensitive files removed from runner"
