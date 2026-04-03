@@ -196,11 +196,34 @@ These are intentional trade-offs for simplicity and learning purposes.
 - CI/CD pipeline design using GitHub Actions
 - Debugging real-world deployment issues
 
+## 🚀 Future Improvements
+
+- Use AWS ECR for image versioning
+- Implement zero-downtime deployment (blue/green or rolling updates)
+- Add reverse proxy (Nginx) with HTTPS
+- Introduce monitoring (Prometheus + Grafana)
+- Migrate to Kubernetes for orchestration
+
 ## 👨‍💻 Author
 
 🔧 Temitope — DevOps Engineer
 
 Built as part of a portfolio project focused on real-world deployment practices.
+
+## 🧑‍💻 My Role (DevOps Engineer)
+
+In this project, I focused on the DevOps responsibilities, assuming the application code was provided by a development team.
+
+Key contributions:
+
+- Containerized the Flask application using Docker
+- Orchestrated multi-service setup with Docker Compose (Flask + MySQL)
+- Implemented service dependency handling using wait-for-db script
+- Added health checks for both application and database
+- Configured production-ready runtime using Gunicorn
+- Built CI/CD pipeline using GitHub Actions
+- Automated deployment to AWS EC2 via SSH
+- Ensured secure handling of environment variables (.env not committed)
 
 ## 📄 License
 
