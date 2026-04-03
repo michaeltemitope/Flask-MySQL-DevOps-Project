@@ -6,6 +6,8 @@ A two-tier web application built with **Flask and MySQL**, containerized using *
 
 This project focuses on applying real-world **DevOps practices**, including container orchestration, service dependency management, automated deployment, and environment configuration.
 
+This project demonstrates how a DevOps engineer takes an existing application and makes it production-ready through containerization, automation, and deployment.
+
 ---
 
 ## 🏗️ Architecture Overview
@@ -45,6 +47,17 @@ This project focuses on applying real-world **DevOps practices**, including cont
 - 🗄️ Database initialization using SQL scripts
 - 📦 Persistent storage using Docker volumes
 - ❤️ Health check endpoint for monitoring
+
+---
+
+## ⚙️ Key DevOps Concepts Demonstrated
+
+- Containerization (Docker)
+- Multi-service orchestration (Docker Compose)
+- CI/CD automation (GitHub Actions)
+- Infrastructure deployment (AWS EC2)
+- Health checks & service readiness
+- Environment variable management
 
 ---
 
