@@ -82,10 +82,12 @@ This project demonstrates how a DevOps engineer takes an existing application an
 ├── wait-for-db.sh
 ├── docker-compose.yml
 ├── Dockerfile
-├── .env
+├── .env                # created locally/on EC2, not committed
 ├── .env.example
 ├── .dockerignore
 └── .github/workflows/deploy.yml
+
+```
 
 ```
 
@@ -112,6 +114,8 @@ docker compose up --build
 
 4. Access the app
 http://localhost:5000
+
+```
 
 ## 🔐 Environment Variables
 
@@ -142,7 +146,7 @@ A sample file is provided: `.env.example`
 Shows data created from db-init/message.sql
 
 ### 📦 Docker Compose Logs (Startup Flow)
-![Strat-up-Flow](screenshots/docker_compose-startup-flow.png)
+![Stratup-Flow](screenshots/docker_compose-startup-flow.png)
 
 ## 🔄 CI/CD Pipeline
 ![Pipeline](screenshots/pipeline.png)
@@ -173,7 +177,7 @@ Workflow Overview
 - Only exposed ports:
     - 5000 → Flask app
     - 22 → SSH
-MySQL is not publicly exposed
+- MySQL is not publicly exposed
 
 ## 🧠 Design Decisions
 
