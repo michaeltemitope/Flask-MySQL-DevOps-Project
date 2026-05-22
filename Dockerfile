@@ -32,10 +32,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the wait-for-db script into the container
 COPY wait-for-db.sh .
 
-# Copy application code,statis and templates into the container
-COPY app/app.py .
-COPY app/templates/ templates/
-COPY app/static/ static/
+# Copy application code,static and templates into the container
+COPY app/ .
 
 # Make script executable, create non-root user and assign ownership
 # All done in one RUN layer as root before switching to appuser
