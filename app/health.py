@@ -18,7 +18,9 @@
 #   register them onto the main app object in another file.
 #   Think of a Blueprint like a mini-app that gets attached
 #   to the real app at startup. Two lines in app.py are all
-#   you need (shown in the app.py diff section below).
+#   you need:
+#       from health import health_bp
+#       app.register_blueprint(health_bp)
 # =============================================================
 
 import time
@@ -26,9 +28,10 @@ import time
 from flask import Blueprint, jsonify, current_app
 
 # Create a Blueprint named 'health'.
-# The first argument is the blueprint's internal name (used by Flask).
-# The second argument is always __name__ — it tells Flask where this
-# file lives so it can find templates and static files if needed.
+# The first argument is the blueprint's internal name (used by Flask
+# internally for url_for() and route registration — not visible to users).
+# The second argument is always __name__ — it tells Flask which Python
+# file this Blueprint lives in, so Flask can resolve relative paths correctly.
 health_bp = Blueprint('health', __name__)
 
 
@@ -46,8 +49,8 @@ health_bp = Blueprint('health', __name__)
 #   Docker's healthcheck, AWS ALBs, and Kubernetes liveness
 #   probes all need a fast, lightweight endpoint to hit every
 #   few seconds. If you make them query the database, you add
-#   unnecessary load and risk false negatives (e.g. DB is slow
-#   but the Flask process is perfectly fine). Separating
+#   unnecessary load and risk false negatives (e.g. the DB is
+#   slow but the Flask process is perfectly fine). Separating
 #   liveness from readiness is a core production practice.
 #
 # HTTP STATUS CODES:
@@ -57,8 +60,9 @@ health_bp = Blueprint('health', __name__)
 @health_bp.route('/health')
 def health():
     """
-    Liveness check — confirms Flask is running.
+    Liveness check — confirms the Flask process is running.
     No database check. Intentionally lightweight.
+    Used by: Docker HEALTHCHECK, uptime monitors, load balancers.
     """
     return jsonify({
         "status": "healthy",
@@ -78,123 +82,128 @@ def health():
 #
 # WHAT PROBLEM IT SOLVES:
 #   During startup, Flask boots in a few milliseconds but MySQL
-#   can take 10–30 seconds to be ready. Without a readiness
+#   can take 10–30 seconds to initialise. Without a readiness
 #   check, a load balancer might route traffic to a container
 #   whose DB connection isn't established yet, giving users
-#   500 errors. The readiness check lets the infrastructure
-#   hold traffic back until the app is truly ready.
+#   500 errors. The readiness check lets infrastructure hold
+#   traffic back until the app is truly ready.
 #
 #   This is also useful after a DB restart or network blip —
-#   the readiness check will fail, the load balancer stops
-#   sending traffic, and resumes only when the DB reconnects.
+#   the readiness check will return 503, the load balancer
+#   stops sending traffic, and resumes only when the DB is
+#   reachable again.
 #
 # HOW IT WORKS INTERNALLY (step by step):
-#   1. Record the start time (for measuring response latency).
-#   2. Grab the 'mysql' object from the Flask app context.
-#      (current_app is Flask's way of safely accessing the app
-#      object from inside a Blueprint without circular imports.)
-#   3. Open a DictCursor — this is a cursor that returns rows
-#      as Python dictionaries instead of plain tuples, making
-#      them easier to work with.
-#   4. Run "SELECT 1" — the simplest possible query. It doesn't
-#      touch any table. It just asks MySQL "are you there?" and
-#      MySQL replies with the number 1. If this fails, the DB
-#      connection is broken.
-#   5. Run "SELECT 1 FROM message LIMIT 1" — this confirms the
-#      'message' table exists and is readable. LIMIT 1 means
-#      MySQL stops after finding one row, so it's fast even if
-#      the table has thousands of rows.
-#   6. If both queries succeed, return 200 with a JSON body
-#      showing what was checked and how long it took.
-#   7. If anything fails (connection error, table missing,
-#      query timeout), catch the exception, log it, and return
-#      503 with a JSON body describing what failed. 503 means
-#      "Service Unavailable" — the correct code for "I'm up
-#      but not ready yet."
+#   1. Record the start time — used to measure how long the
+#      DB check takes. This appears in the response body so
+#      you can spot slow DB responses over time.
+#
+#   2. Import the mysql object directly from app.py.
+#      flask_mysqldb does not register itself in Flask's
+#      standard app.extensions dictionary in a way that's
+#      reliably retrievable by a string key. Importing mysql
+#      from app directly is the correct, simple pattern for
+#      this project's architecture.
+#
+#   3. Open a cursor — this is the object that sends SQL
+#      queries to MySQL and retrieves results. A cursor is
+#      like a temporary channel to the database.
+#
+#   4. Run "SELECT 1" — the simplest possible connectivity
+#      test. It touches no table; it just asks MySQL "are you
+#      there?" and MySQL replies with the number 1. If this
+#      raises an exception, the DB connection is broken.
+#
+#   5. Run "SELECT 1 FROM messages LIMIT 1" — confirms that
+#      the 'messages' table (the one this app depends on)
+#      exists and is readable. LIMIT 1 means MySQL stops
+#      after one row, so it is fast regardless of table size.
+#      If the table is missing, MySQL raises an exception.
+#
+#   6. If both queries succeed, return HTTP 200 with a JSON
+#      body showing what was checked and how long it took.
+#
+#   7. If anything fails, catch the exception, log it to
+#      Gunicorn's stdout (visible via `docker compose logs`),
+#      and return HTTP 503 with a JSON body that describes
+#      exactly what failed — so you can diagnose problems
+#      from the response body without grepping logs.
 #
 # HTTP STATUS CODES:
-#   200 OK             — App is fully ready to serve traffic.
-#   503 Service        — App is running but DB is unreachable
-#       Unavailable      or the required table is missing.
+#   200 OK               — App is fully ready to serve traffic.
+#   503 Service          — App is running but DB is unreachable
+#       Unavailable        or the messages table is missing.
 #
 # =============================================================
 @health_bp.route('/ready')
 def ready():
     """
     Readiness check — confirms Flask AND MySQL are operational.
-    Returns 503 if the database is unreachable or not ready.
+
+    Runs two queries against the live database:
+      1. SELECT 1            — pure connectivity ping
+      2. SELECT 1 FROM messages LIMIT 1 — confirms the required
+         table exists and is readable
+
+    Returns 200 if both pass, 503 if either fails.
+    Used by: Docker HEALTHCHECK, load balancers, CI smoke tests.
     """
+    # Step 1: Record start time so we can report response latency.
     start_time = time.time()
 
-    # Step 1: Grab the mysql extension that was initialised in app.py.
-    # current_app is Flask's proxy to the real app object. We use it
-    # here (instead of importing app directly) to avoid a circular
-    # import: health.py would import app, and app.py imports health.py.
-    mysql = current_app.extensions.get('mysql')
-
-    # Step 2: Defensive check — if mysql wasn't configured on the app,
-    # return 503 immediately with a clear message. This shouldn't happen
-    # in production but catches misconfiguration early.
-    if mysql is None:
-        return jsonify({
-            "status": "not ready",
-            "reason": "MySQL extension is not configured on this app.",
-            "checks": {
-                "mysql_extension": "missing",
-            },
-        }), 503
-
-    # Step 3: Try to connect and run two queries inside a try/except.
-    # Any exception here means something is wrong with the DB layer.
     try:
-        # Open a DictCursor — rows come back as dicts, not plain tuples.
-        # This matches how the rest of the app uses MySQL (via flask_mysqldb).
+        # Step 2: Import mysql from app.py directly.
+        # flask_mysqldb's MySQL object is not reliably accessible via
+        # Flask's app.extensions dict, so we import it by name instead.
+        # This works because app.py and health.py are in the same directory
+        # and the mysql object is a module-level variable in app.py.
+        from app import mysql  # noqa: PLC0415 (intentional deferred import)
+
+        # Step 3: Open a cursor — our channel to the MySQL database.
         cursor = mysql.connection.cursor()
 
-        # Query 1: "SELECT 1" — the most minimal connectivity test.
-        # If MySQL is unreachable, this line raises an exception.
+        # Step 4: Connectivity ping. Raises an exception if MySQL is down.
         cursor.execute("SELECT 1")
-        cursor.fetchone()  # consume the result so the cursor is clean
+        cursor.fetchone()  # consume the result to keep the cursor clean
 
-        # Query 2: Confirm the 'message' table exists and is readable.
-        # LIMIT 1 keeps this fast regardless of table size.
-        # If the table doesn't exist, MySQL raises an OperationalError.
-        cursor.execute("SELECT 1 FROM message LIMIT 1")
+        # Step 5: Table existence check. Raises an exception if the
+        # 'messages' table is missing or the user has no SELECT privilege.
+        # LIMIT 1 keeps this fast even on large tables.
+        cursor.execute("SELECT 1 FROM messages LIMIT 1")
         cursor.fetchone()  # consume the result
 
         cursor.close()
 
-        # Calculate how many milliseconds the DB check took.
-        # This is useful for spotting slow DB responses over time.
+        # Step 6: Both checks passed. Calculate elapsed time and return 200.
         elapsed_ms = round((time.time() - start_time) * 1000, 2)
 
-        # All checks passed — return 200.
         return jsonify({
             "status": "ready",
             "checks": {
                 "mysql_connection": "ok",
-                "message_table": "ok",
+                "messages_table": "ok",   # key matches the actual table name
             },
             "response_time_ms": elapsed_ms,
         }), 200
 
     except Exception as e:
-        # Something failed. Log it so it shows up in `docker logs`.
+        # Step 7: Something failed. Log it and return 503.
+        #
         # current_app.logger writes to Flask's built-in logger, which
         # Gunicorn forwards to stdout — visible in `docker compose logs`.
+        # The error message is also included in the response body so you
+        # can diagnose the problem without leaving your terminal.
         current_app.logger.error("Readiness check failed: %s", str(e))
 
         elapsed_ms = round((time.time() - start_time) * 1000, 2)
 
-        # Return 503 — "I am running but I am not ready."
-        # Include the error message so you can diagnose the problem
-        # directly from the response body without grepping logs.
+        # HTTP 503 — "I am running but I am not ready to take traffic."
         return jsonify({
             "status": "not ready",
             "reason": str(e),
             "checks": {
                 "mysql_connection": "failed",
-                "message_table": "unknown",
+                "messages_table": "unknown",  # we don't know — step 4 failed first
             },
             "response_time_ms": elapsed_ms,
         }), 503

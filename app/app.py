@@ -25,7 +25,7 @@ app.config['MYSQL_DB'] = os.environ.get('DB_NAME', 'default_db')
 # Initialize MySQL
 mysql = MySQL(app)
 
-app.register_blueprint(health_bp
+app.register_blueprint(health_bp)
 
 def init_db():
     with app.app_context():
