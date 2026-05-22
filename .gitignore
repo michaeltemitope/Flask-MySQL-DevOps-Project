@@ -9,7 +9,8 @@ venv/
 .env/
 
 # Environment variables (VERY IMPORTANT)
-.env
+.env.prod
+.env.dev
 
 # Logs
 *.log
